@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Horsey Game Save Editor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0f; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useCallback } = React;
+
+    const MONEY_OFFSET = 0x617A;
+
+    function parseHorses(bytes) {
+      const horses = [];
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let i = 0x0C;
+      while (i < bytes.length - 20) {
+        const nameLen = dv.getUint32(i, true);
+        if (nameLen >= 2 && nameLen <= 36 && i + 4 + nameLen < bytes.length) {
+          let allPrintable = true;
+          for (let j = 0; j < nameLen; j++) {
+            const c = bytes[i + 4 + j];
+            if (c < 0x20 || c > 0x7E) { allPrintable = false; break; }
+          }
+          if (allPrintable) {
+            const name = new TextDecoder().decode(bytes.slice(i + 4, i + 4 + nameLen));
+            const afterName = i + 4 + nameLen;
+            if (afterName < bytes.length && bytes[afterName] === 0) {
+              const typeByte   = bytes[afterName + 1] ?? 0;
+              const genderByte = bytes[afterName + 2] ?? 0;
+              const stableByte = bytes[afterName + 3] ?? 0;
+              const TYPES = ["?","Draft","Thoroughbred","Quarter","Arabian","Andalusian","Warmblood","Mustang","Friesian","Clydesdale","Standardbred","Haflinger","Shetland"];
+              const typeName = TYPES[typeByte] ?? `Type ${typeByte}`;
+              const gender = genderByte === 0 ? "Mare" : genderByte === 1 ? "Stallion" : "Gelding";
+              horses.push({ name, typeName, gender, stableByte });
+              i = afterName + 1;
+              continue;
+            }
+          }
+        }
+        i++;
+      }
+      return horses;
+    }
+
+    function readMoney(bytes) {
+      return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getInt32(MONEY_OFFSET, true);
+    }
+
+    function writeMoney(bytes, value) {
+      const out = new Uint8Array(bytes);
+      new DataView(out.buffer).setInt32(MONEY_OFFSET, value, true);
+      return out;
+    }
+
+    const STABLE_COLORS = ["#c0392b","#e67e22","#f1c40f","#2ecc71","#3498db","#9b59b6","#1abc9c","#e74c3c","#34495e","#16a085","#8e44ad","#d35400","#27ae60"];
+
+    function App() {
+      const [fileBytes, setFileBytes] = useState(null);
+      const [fileName, setFileName] = useState("");
+      const [money, setMoney] = useState(0);
+      const [editMoney, setEditMoney] = useState("");
+      const [horses, setHorses] = useState([]);
+      const [status, setStatus] = useState("");
+      const [dragOver, setDragOver] = useState(false);
+
+      const loadFile = useCallback((file) => {
+        if (!file) return;
+        setFileName(file.name);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const bytes = new Uint8Array(e.target.result);
+          const m = readMoney(bytes);
+          const h = parseHorses(bytes);
+          setFileBytes(bytes);
+          setMoney(m);
+          setEditMoney(m.toString());
+          setHorses(h);
+          setStatus(`Loaded ${file.name} — ${h.length} entities found`);
+        };
+        reader.readAsArrayBuffer(file);
+      }, []);
+
+      const onDrop = (e) => {
+        e.preventDefault();
+        setDragOver(false);
+        loadFile(e.dataTransfer.files[0]);
+      };
+
+      const applyMoneyEdit = () => {
+        const val = parseInt(editMoney, 10);
+        if (isNaN(val) || val < 0 || val > 2147483647) {
+          setStatus("⚠ Invalid value — must be 0 to 2,147,483,647");
+          return;
+        }
+        const newBytes = writeMoney(fileBytes, val);
+        setFileBytes(newBytes);
+        setMoney(val);
+        setStatus(`✓ Money set to $${val.toLocaleString()}`);
+      };
+
+      const downloadFile = () => {
+        let binary = "";
+        const chunkSize = 8192;
+        for (let i = 0; i < fileBytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...fileBytes.slice(i, i + chunkSize));
+        }
+        const b64 = btoa(binary);
+        const a = document.createElement("a");
+        a.href = "data:application/octet-stream;base64," + b64;
+        a.download = fileName || "save1.dat";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setStatus("✓ File downloaded — replace your save file with this");
+      };
+
+      const s = (obj) => obj; // passthrough for inline styles
+
+      return (
+        <div style={{minHeight:"100vh",background:"#0d0d0f",color:"#e8e0d5",fontFamily:"Georgia,'Times New Roman',serif"}}>
+          {/* Header */}
+          <div style={{background:"linear-gradient(135deg,#1a1008 0%,#2d1f0a 50%,#1a1008 100%)",borderBottom:"1px solid #5a3e1b",padding:"28px 40px",display:"flex",alignItems:"center",gap:"20px"}}>
+            <div style={{fontSize:"48px",lineHeight:1}}>🐎</div>
+            <div>
+              <h1 style={{margin:0,fontSize:"28px",fontWeight:"normal",letterSpacing:"0.05em",color:"#d4a84b"}}>Horsey Game Save Editor</h1>
+              <div style={{color:"#8a7055",fontSize:"13px",marginTop:"4px"}}>
+                {fileName ? `Editing: ${fileName}` : "Drop a save1.dat to begin"}
+              </div>
+            </div>
+            {fileBytes && (
+              <button onClick={downloadFile} style={{marginLeft:"auto",background:"#5a3e1b",color:"#d4a84b",border:"1px solid #8a6030",borderRadius:"6px",padding:"10px 22px",fontSize:"14px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                ↓ Download Save
+              </button>
+            )}
+          </div>
+
+          <div style={{maxWidth:"960px",margin:"0 auto",padding:"32px 40px"}}>
+
+            {/* Drop Zone */}
+            {!fileBytes && (
+              <div
+                onDrop={onDrop}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onClick={() => document.getElementById("fileInput").click()}
+                style={{border:`2px dashed ${dragOver?"#d4a84b":"#5a3e1b"}`,borderRadius:"12px",padding:"60px",textAlign:"center",background:dragOver?"rgba(90,62,27,0.2)":"rgba(26,16,8,0.5)",cursor:"pointer",marginBottom:"32px"}}
+              >
+                <div style={{fontSize:"56px",marginBottom:"16px"}}>📂</div>
+                <div style={{color:"#d4a84b",fontSize:"18px",marginBottom:"8px"}}>Drop your save1.dat here</div>
+                <div style={{color:"#8a7055",fontSize:"14px"}}>or click to browse</div>
+                <input id="fileInput" type="file" accept=".dat" style={{display:"none"}} onChange={e => loadFile(e.target.files[0])} />
+              </div>
+            )}
+
+            {fileBytes && (
+              <>
+                {status && (
+                  <div style={{background:"rgba(90,62,27,0.25)",border:"1px solid #5a3e1b",borderRadius:"6px",padding:"10px 16px",marginBottom:"24px",fontSize:"13px",color:"#c4a870"}}>
+                    {status}
+                  </div>
+                )}
+
+                {/* Money */}
+                <section style={{background:"linear-gradient(135deg,#1a1008,#221508)",border:"1px solid #5a3e1b",borderRadius:"12px",padding:"28px",marginBottom:"24px"}}>
+                  <h2 style={{margin:"0 0 20px 0",fontSize:"16px",fontWeight:"normal",color:"#d4a84b",letterSpacing:"0.08em",textTransform:"uppercase"}}>💰 Player Money</h2>
+                  <div style={{display:"flex",alignItems:"center",gap:"16px",flexWrap:"wrap"}}>
+                    <div style={{color:"#8a7055",fontSize:"14px"}}>Current:</div>
+                    <div style={{fontSize:"32px",color:"#d4a84b",fontFamily:"monospace"}}>${money.toLocaleString()}</div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"12px",marginTop:"20px",flexWrap:"wrap"}}>
+                    <label style={{color:"#8a7055",fontSize:"14px"}}>New value:</label>
+                    <span style={{color:"#8a7055"}}>$</span>
+                    <input
+                      type="number" value={editMoney} min={0} max={2147483647}
+                      onChange={e => setEditMoney(e.target.value)}
+                      onKeyDown={e => e.key==="Enter" && applyMoneyEdit()}
+                      style={{background:"#0d0d0f",border:"1px solid #5a3e1b",borderRadius:"6px",color:"#e8e0d5",padding:"8px 14px",fontSize:"20px",fontFamily:"monospace",width:"200px",outline:"none"}}
+                    />
+                    <button onClick={applyMoneyEdit} style={{background:"#d4a84b",color:"#0d0d0f",border:"none",borderRadius:"6px",padding:"9px 20px",fontSize:"14px",cursor:"pointer",fontFamily:"inherit",fontWeight:"bold"}}>Apply</button>
+                    {[100000,1000000,9999999].map(v => (
+                      <button key={v} onClick={() => setEditMoney(v.toString())} style={{background:"transparent",border:"1px solid #5a3e1b",color:"#c4a870",borderRadius:"5px",padding:"6px 12px",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>
+                        ${(v/1000).toFixed(0)}k
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{color:"#5a4030",fontSize:"12px",marginTop:"12px"}}>Offset 0x617A · 32-bit signed integer · little-endian</div>
+                </section>
+
+                {/* Horses */}
+                <section style={{background:"linear-gradient(135deg,#1a1008,#221508)",border:"1px solid #5a3e1b",borderRadius:"12px",padding:"28px"}}>
+                  <h2 style={{margin:"0 0 8px 0",fontSize:"16px",fontWeight:"normal",color:"#d4a84b",letterSpacing:"0.08em",textTransform:"uppercase"}}>🐴 Entities in Save ({horses.length})</h2>
+                  <div style={{color:"#8a7055",fontSize:"12px",marginBottom:"16px"}}>Read-only view — horse stats not yet mapped.</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"10px",maxHeight:"480px",overflowY:"auto"}}>
+                    {horses.map((h, i) => (
+                      <div key={i} style={{background:"rgba(0,0,0,0.3)",border:"1px solid #3a2a10",borderLeft:`3px solid ${STABLE_COLORS[h.stableByte % STABLE_COLORS.length]}`,borderRadius:"6px",padding:"10px 14px"}}>
+                        <div style={{fontWeight:"bold",color:"#e8d8b0",fontSize:"14px",marginBottom:"4px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{h.name}</div>
+                        <div style={{fontSize:"11px",color:"#8a7055"}}>{h.typeName} · {h.gender}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <div style={{textAlign:"center",marginTop:"20px"}}>
+                  <button onClick={() => { setFileBytes(null); setFileName(""); setHorses([]); setStatus(""); }}
+                    style={{background:"transparent",border:"1px solid #5a3e1b",color:"#8a7055",borderRadius:"6px",padding:"8px 20px",fontSize:"13px",cursor:"pointer",fontFamily:"inherit"}}>
+                    Load different file
+                  </button>
+                </div>
+              </>
+            )}
+
+            <div style={{marginTop:"40px",borderTop:"1px solid #2a1a08",paddingTop:"16px",fontSize:"11px",color:"#4a3520",textAlign:"center"}}>
+              Fields discovered so far: Money @ 0x617A. More fields coming as they're mapped.
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
